@@ -197,4 +197,7 @@ write_csv(
 Before formal model development, a QC comparison of FOCEi estimation settings was conducted using the base one-compartment model with proportional residual error. Under single-thread execution, the FOCEi-nlminb setting completed successfully but returned false convergence (8), indicating suboptimal optimization stability. In contrast, the FOCEi-bobyqa setting completed with Normal exit from bobyqa and produced lower OBJF, AIC, and BIC values than the nlminb setting. Therefore, the single-thread FOCEi-bobyqa setting with optExpression = FALSE was selected as the fixed estimation setting for subsequent formal PopPK model development.
 
 
-## To check the detailed result of the two model, run print(fit_FOCEI_NLMINB_1T)/print(fit_FOCEI_BOBYQA_1T)
+## To check the detailed result of the two model, run
+
+print(fit_FOCEI_NLMINB_1T)
+print(fit_FOCEI_BOBYQA_1T)
