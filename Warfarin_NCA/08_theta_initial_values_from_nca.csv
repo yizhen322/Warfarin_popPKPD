@@ -1,0 +1,7 @@
+parameter,source,value
+theta_KA,Tmax-based rough estimate; not direct NCA parameter,0.085007275
+theta_CLF,NCA geometric mean of CL/F,0.145399205
+theta_VZF,NCA geometric mean of Vz/F,8.882339964
+log_theta_KA,log(theta_KA),-2.465018441
+log_theta_CLF,log(theta_CLF),-1.928272182
+log_theta_VZF,log(theta_VZF),2.184065032

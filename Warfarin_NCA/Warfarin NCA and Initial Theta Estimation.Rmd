@@ -1,0 +1,544 @@
+---
+title: "Warfarin NCA and Initial Theta estimation"
+author: "Yizhen Lai"
+date: "2026-06-16"
+output: word_document
+---
+
+############################################################
+# Warfarin PKNCA workflow
+# Full workflow:
+# 1. Load warfarin data
+# 2. Extract PK concentration data
+# 3. Add predose concentration at time 0
+# 4. Handle duplicate concentration records
+# 5. Run individual-level NCA with PKNCA
+# 6. Create individual NCA table
+# 7. Create NCA summary statistics
+# 8. Derive initial theta values for nlmixr2
+############################################################
+
+############################################################
+# 0. Package setup
+############################################################
+
+```{r}
+options(timeout = 1000)
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+pkgs <- c(
+  "nlmixr2data",
+  "PKNCA",
+  "dplyr",
+  "tidyr",
+  "tibble"
+)
+
+new_pkgs <- pkgs[!pkgs %in% rownames(installed.packages())]
+
+if (length(new_pkgs) > 0) {
+  install.packages(new_pkgs, dependencies = TRUE, type = "binary")
+}
+
+library(nlmixr2data)
+library(PKNCA)
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+get_output_dir <- function() {
+  input_file <- tryCatch(
+    knitr::current_input(dir = TRUE),
+    error = function(e) character(0)
+  )
+  
+  if (length(input_file) > 0 && nzchar(input_file[1])) {
+    input_file <- input_file[1]
+    return(dirname(normalizePath(input_file, winslash = "/", mustWork = FALSE)))
+  }
+  
+  getwd()
+}
+
+output_dir <- get_output_dir()
+
+############################################################
+# 1. Load warfarin data
+############################################################
+
+data("warfarin", package = "nlmixr2data")
+
+wf <- warfarin %>%
+  mutate(
+    id   = as.character(id),
+    time = as.numeric(time),
+    amt  = as.numeric(amt),
+    dv   = as.numeric(dv),
+    evid = as.numeric(evid),
+    dvid = as.character(dvid)
+  )
+
+cat("\n==============================\n")
+cat("Data overview\n")
+cat("==============================\n")
+print(dim(wf))
+print(table(wf$dvid, useNA = "ifany"))
+
+############################################################
+# 2. Keep PK concentration part only
+# dvid == "cp": PK concentration
+# dvid == "pca": PD response
+############################################################
+
+pk_data <- wf %>%
+  filter(dvid == "cp")
+
+############################################################
+# 3. Prepare dose data
+############################################################
+
+dose_data <- pk_data %>%
+  filter(evid != 0, !is.na(amt), amt > 0) %>%
+  transmute(
+    id = id,
+    time = time,
+    dose = amt
+  )
+
+cat("\n==============================\n")
+cat("Dose data\n")
+cat("==============================\n")
+cat("Number of dose records:", nrow(dose_data), "\n")
+print(as_tibble(head(dose_data, 10)))
+
+write.csv(
+  dose_data,
+  file.path(output_dir, "01_dose_for_pknca.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 4. Prepare observed concentration data
+############################################################
+
+conc_obs <- pk_data %>%
+  filter(evid == 0, !is.na(dv), dv >= 0) %>%
+  transmute(
+    id = id,
+    time = time,
+    conc = dv
+  )
+
+############################################################
+# 5. Add predose concentration
+# For single oral dose NCA, add time = 0, conc = 0
+# This allows PKNCA to calculate AUC from 0 to last / infinity.
+############################################################
+
+conc_time0 <- dose_data %>%
+  transmute(
+    id = id,
+    time = 0,
+    conc = 0
+  )
+
+conc_data_raw <- bind_rows(
+  conc_time0,
+  conc_obs
+) %>%
+  arrange(as.numeric(id), time)
+
+############################################################
+# 6. Check duplicate concentration records
+############################################################
+
+dup_conc <- conc_data_raw %>%
+  count(id, time) %>%
+  filter(n > 1)
+
+cat("\n==============================\n")
+cat("Duplicate concentration time points\n")
+cat("==============================\n")
+print(as_tibble(dup_conc), n = Inf)
+
+dup_conc_detail <- conc_data_raw %>%
+  semi_join(dup_conc, by = c("id", "time")) %>%
+  arrange(as.numeric(id), time)
+
+cat("\n==============================\n")
+cat("Duplicate concentration details\n")
+cat("==============================\n")
+print(as_tibble(dup_conc_detail), n = Inf)
+
+write.csv(
+  dup_conc_detail,
+  file.path(output_dir, "02_duplicate_concentration_records.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 7. Handle duplicates for NCA
+# Same id + same time: use mean concentration
+############################################################
+
+conc_data_clean <- conc_data_raw %>%
+  group_by(id, time) %>%
+  summarise(
+    conc = mean(conc, na.rm = TRUE),
+    n_original = n(),
+    .groups = "drop"
+  )
+
+cat("\n==============================\n")
+cat("Concentration records after duplicate handling\n")
+cat("==============================\n")
+print(
+  as_tibble(
+    conc_data_clean %>%
+      filter(n_original > 1) %>%
+      arrange(as.numeric(id), time)
+  ),
+  n = Inf
+)
+
+conc_data_pknca <- conc_data_clean %>%
+  select(id, time, conc)
+
+cat("\nNumber of concentration records used for NCA:", nrow(conc_data_pknca), "\n")
+
+write.csv(
+  conc_data_pknca,
+  file.path(output_dir, "03_concentration_for_pknca.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 8. Create PKNCA objects
+############################################################
+
+conc_obj <- PKNCAconc(
+  conc ~ time | id,
+  data = conc_data_pknca
+)
+
+dose_obj <- PKNCAdose(
+  dose ~ time | id,
+  data = dose_data
+)
+
+############################################################
+# 9. Define NCA intervals
+############################################################
+
+intervals <- data.frame(
+  start = 0,
+  end = Inf,
+  auclast = TRUE,
+  aucinf.obs = TRUE,
+  cmax = TRUE,
+  tmax = TRUE,
+  half.life = TRUE,
+  cl.obs = TRUE,
+  vz.obs = TRUE
+)
+
+############################################################
+# 10. Run individual-level NCA
+############################################################
+
+nca_obj <- PKNCAdata(
+  conc_obj,
+  dose_obj,
+  intervals = intervals
+)
+
+nca_result <- pk.nca(nca_obj)
+
+nca_df <- as.data.frame(nca_result)
+
+cat("\n==============================\n")
+cat("Raw PKNCA result\n")
+cat("==============================\n")
+print(as_tibble(nca_df), n = Inf)
+
+write.csv(
+  nca_df,
+  file.path(output_dir, "04_pknca_result_long_raw.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 11. Clean PKNCA output
+############################################################
+
+nca_long <- nca_df %>%
+  transmute(
+    id = as.character(id),
+    parameter = tolower(as.character(PPTESTCD)),
+    value = suppressWarnings(as.numeric(as.character(PPORRES))),
+    exclude = exclude
+  )
+
+cat("\n==============================\n")
+cat("Excluded NCA results, if any\n")
+cat("==============================\n")
+print(
+  as_tibble(
+    nca_long %>%
+      filter(!is.na(exclude))
+  ),
+  n = Inf
+)
+
+nca_long_clean <- nca_long %>%
+  filter(is.na(exclude), !is.na(value))
+
+cat("\n==============================\n")
+cat("Clean long-format NCA result\n")
+cat("==============================\n")
+print(as_tibble(nca_long_clean), n = Inf)
+
+write.csv(
+  nca_long_clean,
+  file.path(output_dir, "05_pknca_result_long_clean.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 12. Create individual NCA table
+############################################################
+
+wanted_params <- c(
+  "auclast",
+  "aucinf.obs",
+  "cmax",
+  "tmax",
+  "half.life",
+  "cl.obs",
+  "vz.obs"
+)
+
+nca_individual <- nca_long_clean %>%
+  filter(parameter %in% wanted_params) %>%
+  distinct(id, parameter, .keep_all = TRUE) %>%
+  select(id, parameter, value) %>%
+  pivot_wider(
+    names_from = parameter,
+    values_from = value
+  ) %>%
+  arrange(as.numeric(id))
+
+cat("\n==============================\n")
+cat("Individual NCA table\n")
+cat("==============================\n")
+print(as_tibble(nca_individual), n = Inf)
+
+write.csv(
+  nca_individual,
+  file.path(output_dir, "06_pknca_individual_table.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 13. NCA summary statistics
+############################################################
+
+geo_mean <- function(x) {
+  x <- x[is.finite(x) & !is.na(x) & x > 0]
+  if (length(x) == 0) return(NA_real_)
+  exp(mean(log(x)))
+}
+
+geo_cv_percent <- function(x) {
+  x <- x[is.finite(x) & !is.na(x) & x > 0]
+  if (length(x) <= 1) return(NA_real_)
+  100 * sqrt(exp(sd(log(x))^2) - 1)
+}
+
+nca_stat <- nca_long_clean %>%
+  filter(parameter %in% wanted_params) %>%
+  group_by(parameter) %>%
+  summarise(
+    n = sum(!is.na(value)),
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    cv_percent = 100 * sd / mean,
+    median = median(value, na.rm = TRUE),
+    geometric_mean = geo_mean(value),
+    geometric_cv_percent = geo_cv_percent(value),
+    min = min(value, na.rm = TRUE),
+    max = max(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(match(parameter, wanted_params))
+
+cat("\n==============================\n")
+cat("NCA summary statistics\n")
+cat("==============================\n")
+print(as_tibble(nca_stat), n = Inf)
+
+write.csv(
+  nca_stat,
+  file.path(output_dir, "07_pknca_summary_statistics.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 14. Derive initial theta values for nlmixr2
+############################################################
+
+cl_init <- nca_stat %>%
+  filter(parameter == "cl.obs") %>%
+  pull(geometric_mean)
+
+v_init <- nca_stat %>%
+  filter(parameter == "vz.obs") %>%
+  pull(geometric_mean)
+
+tmax_median <- nca_stat %>%
+  filter(parameter == "tmax") %>%
+  pull(median)
+
+# Fallbacks
+if (length(cl_init) == 0 || is.na(cl_init) || !is.finite(cl_init)) {
+  cl_init <- nca_stat %>%
+    filter(parameter == "cl.obs") %>%
+    pull(median)
+}
+
+if (length(v_init) == 0 || is.na(v_init) || !is.finite(v_init)) {
+  v_init <- nca_stat %>%
+    filter(parameter == "vz.obs") %>%
+    pull(median)
+}
+
+if (length(tmax_median) == 0 || is.na(tmax_median) || !is.finite(tmax_median)) {
+  tmax_median <- 1
+}
+
+############################################################
+# 15. Estimate rough Ka initial value
+# Ka is not directly estimated by NCA.
+# This only provides a rough initial value for nlmixr2.
+############################################################
+
+estimate_ka_from_tmax <- function(tmax, k) {
+  if (
+    length(tmax) == 0 || length(k) == 0 ||
+    is.na(tmax) || is.na(k) ||
+    !is.finite(tmax) || !is.finite(k) ||
+    tmax <= 0 || k <= 0
+  ) {
+    return(1)
+  }
+  
+  f <- function(ka) {
+    log(ka / k) / (ka - k) - tmax
+  }
+  
+  out <- tryCatch(
+    uniroot(
+      f,
+      lower = k * 1.001,
+      upper = 100
+    )$root,
+    error = function(e) NA_real_
+  )
+  
+  if (!is.finite(out) || is.na(out)) {
+    return(1)
+  }
+  
+  out
+}
+
+k_init <- cl_init / v_init
+
+ka_init <- estimate_ka_from_tmax(
+  tmax = tmax_median,
+  k = k_init
+)
+
+# Safety fallback
+if (!is.finite(ka_init) || is.na(ka_init) || ka_init <= 0 || ka_init > 10) {
+  ka_init <- 1
+}
+
+############################################################
+# 16. Final theta table
+############################################################
+
+theta_init <- tibble(
+  parameter = c(
+    "theta_KA",
+    "theta_CLF",
+    "theta_VZF",
+    "log_theta_KA",
+    "log_theta_CLF",
+    "log_theta_VZF"
+  ),
+  source = c(
+    "Tmax-based rough estimate; not direct NCA parameter",
+    "NCA geometric mean of CL/F",
+    "NCA geometric mean of Vz/F",
+    "log(theta_KA)",
+    "log(theta_CLF)",
+    "log(theta_VZF)"
+  ),
+  value = c(
+    ka_init,
+    cl_init,
+    v_init,
+    log(ka_init),
+    log(cl_init),
+    log(v_init)
+  )
+)
+
+cat("\n==============================\n")
+cat("Initial theta values for nlmixr2\n")
+cat("==============================\n")
+print(as_tibble(theta_init), n = Inf)
+
+write.csv(
+  theta_init,
+  file.path(output_dir, "08_theta_initial_values_from_nca.csv"),
+  row.names = FALSE
+)
+
+############################################################
+# 17. Print ini() values for nlmixr2
+############################################################
+
+cat("\n============================================================\n")
+cat("Use these values in nlmixr2 ini():\n")
+cat("============================================================\n\n")
+
+cat("tka <- log(", signif(ka_init, 5), ")\n", sep = "")
+cat("tcl <- log(", signif(cl_init, 5), ")\n", sep = "")
+cat("tv  <- log(", signif(v_init, 5), ")\n", sep = "")
+
+cat("\nRecommended initial random effects and residual error:\n\n")
+cat("eta.ka ~ 0.1\n")
+cat("eta.cl ~ 0.1\n")
+cat("eta.v  ~ 0.1\n")
+cat("prop.err <- 0.2\n")
+
+cat("\n============================================================\n")
+cat("Done. Files saved in current working directory:\n")
+cat("============================================================\n")
+cat("01_dose_for_pknca.csv\n")
+cat("02_duplicate_concentration_records.csv\n")
+cat("03_concentration_for_pknca.csv\n")
+cat("04_pknca_result_long_raw.csv\n")
+cat("05_pknca_result_long_clean.csv\n")
+cat("06_pknca_individual_table.csv\n")
+cat("07_pknca_summary_statistics.csv\n")
+cat("08_theta_initial_values_from_nca.csv\n")
+```
+
+
+
+
+
+

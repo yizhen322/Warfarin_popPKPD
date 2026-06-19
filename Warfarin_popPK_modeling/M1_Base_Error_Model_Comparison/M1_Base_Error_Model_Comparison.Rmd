@@ -1,0 +1,397 @@
+---
+title: "M1_Base_Error_Model_Comparison"
+author: "Yizhen Lai"
+date: "2026-06-19"
+output: html_document
+---
+
+############################################################
+# Base one-compartment model: residual error comparison
+# Models:
+# 1. baseM1_add  : additive error
+# 2. baseM1_prop : proportional error
+# 3. baseM1_comb : additive + proportional error
+############################################################
+
+```{r}
+
+############################################################
+# 0. Environment
+############################################################
+
+library(readr)
+library(dplyr)
+library(tibble)
+library(nlmixr2)
+library(rxode2)
+library(here)
+
+here::dr_here()
+
+data_file <- here(
+  "Data",
+  "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"
+)
+
+output_dir <- here(
+  "Warfarin_popPK_modeling",
+  "M1_Base_Error_Model_Comparison"
+)
+
+dir.create(
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+stopifnot(file.exists(data_file))
+
+cat("Input data file:", data_file, "\n")
+cat("Output directory:", output_dir, "\n")
+
+
+try(rxode2::rxClean(), silent = TRUE)
+try(rxode2::rxForget(), silent = TRUE)
+
+gc()
+
+rxode2::setRxThreads(1)
+
+cat("rxode2 threads:", rxode2::getRxThreads(), "\n")
+
+```
+
+```{r}
+
+############################################################
+# 1. Read and prepare PopPK data
+############################################################
+
+dat_raw <- read_csv(
+  data_file,
+  show_col_types = FALSE
+)
+
+pk_data <- dat_raw %>%
+  filter(evid == 1 | (evid == 0 & dvid == "cp")) %>%
+  mutate(
+    ID   = as.integer(id),
+    TIME = as.numeric(time),
+    DV   = ifelse(evid == 1, NA_real_, as.numeric(dv)),
+    AMT  = ifelse(evid == 1, as.numeric(amt), 0),
+    EVID = as.integer(evid),
+    CMT  = ifelse(EVID == 1, "depot", "central")
+  ) %>%
+  select(ID, TIME, DV, AMT, EVID, CMT) %>%
+  arrange(ID, TIME, desc(EVID))
+
+names(pk_data)
+table(pk_data$EVID, pk_data$CMT)
+
+```
+
+```{r}
+
+############################################################
+# 2. Model 1: additive residual error
+############################################################
+
+baseM1_add <- function() {
+  ini({
+    tka <- log(1)
+    tcl <- log(0.145)
+    tv  <- log(8.882)
+
+    eta.ka ~ 0.1
+    eta.cl ~ 0.1
+    eta.v  ~ 0.1
+
+    add.err <- 0.5
+  })
+
+  model({
+    ka <- exp(tka + eta.ka)
+    cl <- exp(tcl + eta.cl)
+    v  <- exp(tv  + eta.v)
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ add(add.err)
+  })
+}
+
+############################################################
+# 3. Model 2: proportional residual error
+############################################################
+
+baseM1_prop <- function() {
+  ini({
+    tka <- log(1)
+    tcl <- log(0.145)
+    tv  <- log(8.882)
+
+    eta.ka ~ 0.1
+    eta.cl ~ 0.1
+    eta.v  ~ 0.1
+
+    prop.err <- 0.2
+  })
+
+  model({
+    ka <- exp(tka + eta.ka)
+    cl <- exp(tcl + eta.cl)
+    v  <- exp(tv  + eta.v)
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ prop(prop.err)
+  })
+}
+
+############################################################
+# 4. Model 3: combined residual error
+############################################################
+
+baseM1_comb <- function() {
+  ini({
+    tka <- log(1)
+    tcl <- log(0.145)
+    tv  <- log(8.882)
+
+    eta.ka ~ 0.1
+    eta.cl ~ 0.1
+    eta.v  ~ 0.1
+
+    add.err  <- 0.3
+    prop.err <- 0.2
+  })
+
+  model({
+    ka <- exp(tka + eta.ka)
+    cl <- exp(tcl + eta.cl)
+    v  <- exp(tv  + eta.v)
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ add(add.err) + prop(prop.err)
+  })
+}
+
+############################################################
+# 5. Fit models using selected formal FOCEi setting
+#    single thread + bobyqa + optExpression FALSE
+############################################################
+
+fit_baseM1_add <- nlmixr2(
+  baseM1_add,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "bobyqa",
+    optExpression = FALSE
+  )
+)
+
+
+fit_baseM1_prop <- nlmixr2(
+  baseM1_prop,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "bobyqa",
+    optExpression = FALSE
+  )
+)
+
+
+fit_baseM1_comb <- nlmixr2(
+  baseM1_comb,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "bobyqa",
+    optExpression = FALSE
+  )
+)
+
+```
+
+
+```{r}
+############################################################
+# 6. Residual error model comparison
+############################################################
+
+error_compare <- tibble(
+  model_code = c(
+    "baseM1_add",
+    "baseM1_prop",
+    "baseM1_comb"
+  ),
+  structural_model = c(
+    "One-compartment oral model",
+    "One-compartment oral model",
+    "One-compartment oral model"
+  ),
+  residual_error_model = c(
+    "Additive error",
+    "Proportional error",
+    "Additive + proportional error"
+  ),
+  estimation_setting = c(
+    "FOCEi + bobyqa + 1 thread + optExpression FALSE",
+    "FOCEi + bobyqa + 1 thread + optExpression FALSE",
+    "FOCEi + bobyqa + 1 thread + optExpression FALSE"
+  ),
+  message = c(
+    paste(fit_baseM1_add$message, collapse = "; "),
+    paste(fit_baseM1_prop$message, collapse = "; "),
+    paste(fit_baseM1_comb$message, collapse = "; ")
+  ),
+  OBJF = c(
+    fit_baseM1_add$objf,
+    fit_baseM1_prop$objf,
+    fit_baseM1_comb$objf
+  ),
+  AIC = c(
+    AIC(fit_baseM1_add),
+    AIC(fit_baseM1_prop),
+    AIC(fit_baseM1_comb)
+  ),
+  BIC = c(
+    BIC(fit_baseM1_add),
+    BIC(fit_baseM1_prop),
+    BIC(fit_baseM1_comb)
+  ),
+  runInfo = c(
+    paste(fit_baseM1_add$runInfo, collapse = " | "),
+    paste(fit_baseM1_prop$runInfo, collapse = " | "),
+    paste(fit_baseM1_comb$runInfo, collapse = " | ")
+  )
+) %>%
+  arrange(AIC)
+
+print(error_compare, n = Inf, width = Inf)
+
+csv_output_file <- file.path(
+  output_dir,
+  "M1_Base_Error_Model_Comparison_results.csv"
+)
+
+write_csv(
+  error_compare,
+  csv_output_file
+)
+
+cat("CSV saved to:", csv_output_file, "\n")
+cat("CSV exists:", file.exists(csv_output_file), "\n")
+
+
+```
+
+```{r}
+############################################################
+# Xpose GOF plots for residual error model comparison
+############################################################
+
+library(xpose)
+library(xpose.nlmixr2)
+library(ggplot2)
+
+xp_add <- xpose_data_nlmixr(
+  fit_baseM1_add,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+xp_prop <- xpose_data_nlmixr(
+  fit_baseM1_prop,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+xp_comb <- xpose_data_nlmixr(
+  fit_baseM1_comb,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+##DV vs PRED
+dv_vs_pred(xp_add)
+dv_vs_pred(xp_prop)
+dv_vs_pred(xp_comb)
+
+##DV vs IPRED
+dv_vs_ipred(xp_add)
+dv_vs_ipred(xp_prop)
+dv_vs_ipred(xp_comb)
+
+##CWRES vs TIME
+res_vs_idv(xp_add, res = "CWRES")
+res_vs_idv(xp_prop, res = "CWRES")
+res_vs_idv(xp_comb, res = "CWRES")
+
+##CWRES vs PRED
+res_vs_pred(xp_add, res = "CWRES")
+res_vs_pred(xp_prop, res = "CWRES")
+res_vs_pred(xp_comb, res = "CWRES")
+
+##Result output 
+pdf_output_file <- file.path(
+  output_dir,
+  "M1_Error_Model_xpose_GOF_plots.pdf"
+)
+
+pdf(
+  pdf_output_file,
+  width = 8,
+  height = 6
+)
+
+print(dv_vs_pred(xp_add) + labs(caption = NULL))
+print(dv_vs_ipred(xp_add) + labs(caption = NULL))
+print(res_vs_idv(xp_add, res = "CWRES") + labs(caption = NULL))
+print(res_vs_pred(xp_add, res = "CWRES") + labs(caption = NULL))
+
+print(dv_vs_pred(xp_prop) + labs(caption = NULL))
+print(dv_vs_ipred(xp_prop) + labs(caption = NULL))
+print(res_vs_idv(xp_prop, res = "CWRES") + labs(caption = NULL))
+print(res_vs_pred(xp_prop, res = "CWRES") + labs(caption = NULL))
+
+print(dv_vs_pred(xp_comb) + labs(caption = NULL))
+print(dv_vs_ipred(xp_comb) + labs(caption = NULL))
+print(res_vs_idv(xp_comb, res = "CWRES") + labs(caption = NULL))
+print(res_vs_pred(xp_comb, res = "CWRES") + labs(caption = NULL))
+
+dev.off()
+
+cat("PDF saved to:", pdf_output_file, "\n")
+cat("PDF exists:", file.exists(pdf_output_file), "\n")
+
+```
+
+## Residual Error Model Comparison Conclusion
+
+Residual error model comparison was performed using the base one-compartment oral model under the selected FOCEi-bobyqa estimation setting. Three residual error structures were evaluated: additive error, proportional error, and combined additive plus proportional error.
+
+All three models completed with normal optimizer termination. Among the candidate models, the combined additive plus proportional residual error model provided the best fit, with the lowest OBJF, AIC, and BIC values. Specifically, baseM1_comb showed lower OBJF, AIC, and BIC than both baseM1_add and baseM1_prop, indicating that the improvement was not solely due to the additional residual error parameter. The goodness-of-fit plots also did not show apparent deterioration for the combined error model.
+
+The proportional error model performed worst among the three candidates, suggesting that a pure proportional residual error structure was not sufficient for the current dataset. This may be related to the presence of low or near-zero concentration observations, for which a purely proportional error model can underestimate residual variability. The better performance of the additive and combined error models suggests that an absolute residual error component is present in the data.
+
+Therefore, the combined additive plus proportional residual error model was selected for subsequent model development.
+
+Selected model: baseM1_comb
+Selected residual error structure: additive + proportional error
+
+
+## To see the detailed result of each model, run 
+
+print(fit_baseM1_add)
+print(fit_baseM1_prop)
+print(fit_baseM1_comb)

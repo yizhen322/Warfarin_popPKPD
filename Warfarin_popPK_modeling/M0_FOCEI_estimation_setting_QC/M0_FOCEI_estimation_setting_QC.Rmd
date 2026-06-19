@@ -1,0 +1,200 @@
+---
+title: "M0_FOCEI_estimation_setting_QC"
+author: "Yizhen Lai"
+date: "2026-06-18"
+output: html_document
+---
+
+############################################################
+# Simple QC before formal PopPK modeling
+# Compare:
+# 1) FOCEi + nlminb + 1 thread + optExpression TRUE
+# 2) FOCEi + bobyqa + 1 thread + optExpression FALSE
+############################################################
+
+```{r}
+
+rm(list = ls())
+
+while (!is.null(dev.list())) {
+  dev.off()
+}
+
+gc()
+
+library(readr)
+library(dplyr)
+library(tibble)
+library(nlmixr2)
+library(rxode2)
+library(here)
+
+output_dir <- here("Warfarin_popPK_modeling","M0_FOCEI_estimation_setting_QC")
+
+dir.create(
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+try(rxode2::rxClean(), silent = TRUE)
+try(rxode2::rxForget(), silent = TRUE)
+
+gc()
+
+rxode2::setRxThreads(1)
+
+cat("rxode2 threads:", rxode2::getRxThreads(), "\n")
+
+```
+
+```{r}
+
+############################################################
+# 1. Read and prepare data
+############################################################
+
+dat_raw <- read_csv(
+  here("Data", "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"),
+  show_col_types = FALSE
+)
+
+
+pk_data <- dat_raw %>%
+  filter(evid == 1 | (evid == 0 & dvid == "cp")) %>%
+  mutate(
+    ID   = as.integer(id),
+    TIME = as.numeric(time),
+    DV   = ifelse(evid == 1, NA_real_, as.numeric(dv)),
+    AMT  = ifelse(evid == 1, as.numeric(amt), 0),
+    EVID = as.integer(evid),
+    CMT  = ifelse(EVID == 1, "depot", "central")
+  ) %>%
+  select(ID, TIME, DV, AMT, EVID, CMT) %>%
+  arrange(ID, TIME, desc(EVID))
+
+names(pk_data)
+table(pk_data$EVID, pk_data$CMT)
+
+############################################################
+# 2. Define base one-compartment proportional error model
+############################################################
+
+baseM1_prop <- function() {
+  ini({
+    tka <- log(1)
+    tcl <- log(0.145)
+    tv  <- log(8.882)
+
+    eta.ka ~ 0.1
+    eta.cl ~ 0.1
+    eta.v  ~ 0.1
+
+    prop.err <- 0.2
+  })
+
+  model({
+    ka <- exp(tka + eta.ka)
+    cl <- exp(tcl + eta.cl)
+    v  <- exp(tv  + eta.v)
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ prop(prop.err)
+  })
+}
+
+############################################################
+# 3. Fit 1: FOCEi + nlminb
+############################################################
+
+fit_FOCEI_NLMINB_1T <- nlmixr2(
+  baseM1_prop,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "nlminb",
+    optExpression = TRUE
+  )
+)
+
+############################################################
+# 4. Fit 2: FOCEi + bobyqa
+############################################################
+
+fit_FOCEI_BOBYQA_1T <- nlmixr2(
+  baseM1_prop,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "bobyqa",
+    optExpression = FALSE
+  )
+)
+
+```
+
+```{r}
+
+############################################################
+# Simple QC result comparison only
+# Compare FOCEi-nlminb vs FOCEi-bobyqa
+############################################################
+
+library(dplyr)
+library(tibble)
+library(readr)
+
+qc_compare <- tibble(
+  model_code = c(
+    "FOCEI_NLMINB_1T",
+    "FOCEI_BOBYQA_1T"
+  ),
+  method = c(
+    "FOCEi",
+    "FOCEi"
+  ),
+  setting = c(
+    "1 thread + nlminb + optExpression TRUE",
+    "1 thread + bobyqa + optExpression FALSE"
+  ),
+  message = c(
+    paste(fit_FOCEI_NLMINB_1T$message, collapse = "; "),
+    paste(fit_FOCEI_BOBYQA_1T$message, collapse = "; ")
+  ),
+  OBJF = c(
+    fit_FOCEI_NLMINB_1T$objf,
+    fit_FOCEI_BOBYQA_1T$objf
+  ),
+  AIC = c(
+    AIC(fit_FOCEI_NLMINB_1T),
+    AIC(fit_FOCEI_BOBYQA_1T)
+  ),
+  BIC = c(
+    BIC(fit_FOCEI_NLMINB_1T),
+    BIC(fit_FOCEI_BOBYQA_1T)
+  ),
+  role = c(
+    "FOCEi setting comparison",
+    "FOCEi setting comparison; recommended formal setting"
+  )
+)
+
+print(qc_compare, n = Inf, width = Inf)
+
+write_csv(
+  qc_compare,
+  file.path(output_dir, "M0_FOCEI_estimation_setting_QC_results.csv")
+)
+
+```
+
+## QC conclusion
+
+Before formal model development, a QC comparison of FOCEi estimation settings was conducted using the base one-compartment model with proportional residual error. Under single-thread execution, the FOCEi-nlminb setting completed successfully but returned false convergence (8), indicating suboptimal optimization stability. In contrast, the FOCEi-bobyqa setting completed with Normal exit from bobyqa and produced lower OBJF, AIC, and BIC values than the nlminb setting. Therefore, the single-thread FOCEi-bobyqa setting with optExpression = FALSE was selected as the fixed estimation setting for subsequent formal PopPK model development.
+
+
+## To check the detailed result of the two model, run print(fit_FOCEI_NLMINB_1T)/print(fit_FOCEI_BOBYQA_1T)
