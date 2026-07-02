@@ -1,0 +1,371 @@
+---
+title: "M2_Random_Effects_Comparison"
+author: "Yizhen Lai"
+date: "2026-07-02"
+output: html_document
+---
+
+```{r}
+
+############################################################
+# 0. Environment
+############################################################
+
+library(readr)
+library(dplyr)
+library(tibble)
+library(nlmixr2)
+library(rxode2)
+library(here)
+
+here::dr_here()
+
+data_file <- here(
+  "Data",
+  "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"
+)
+
+output_dir <- here(
+  "Warfarin_popPK_modeling",
+  "M2_Random_Effects_Comparison"
+)
+
+dir.create(
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+stopifnot(file.exists(data_file))
+
+cat("Input data file:", data_file, "\n")
+cat("Output directory:", output_dir, "\n")
+
+
+try(rxode2::rxClean(), silent = TRUE)
+try(rxode2::rxForget(), silent = TRUE)
+
+gc()
+
+rxode2::setRxThreads(1)
+
+cat("rxode2 threads:", rxode2::getRxThreads(), "\n")
+
+```
+
+```{r}
+
+############################################################
+# 1. Read and prepare PopPK data
+############################################################
+
+dat_raw <- read_csv(
+  data_file,
+  show_col_types = FALSE
+)
+
+pk_data <- dat_raw %>%
+  filter(evid == 1 | (evid == 0 & dvid == "cp")) %>%
+  mutate(
+    ID   = as.integer(id),
+    TIME = as.numeric(time),
+    DV   = ifelse(evid == 1, NA_real_, as.numeric(dv)),
+    AMT  = ifelse(evid == 1, as.numeric(amt), 0),
+    EVID = as.integer(evid),
+    CMT  = ifelse(EVID == 1, "depot", "central")
+  ) %>%
+  select(ID, TIME, DV, AMT, EVID, CMT) %>%
+  arrange(ID, TIME, desc(EVID))
+
+names(pk_data)
+table(pk_data$EVID, pk_data$CMT)
+print(pk_data, n = 279)
+
+```
+
+```{r}
+
+############################################################
+# 2. Model 1: full IIV model
+############################################################
+
+M2_full_IIV <- function() {
+  ini({
+    tka <- log(1)
+    tcl <- log(0.145)
+    tv  <- log(8.882)
+
+    eta.ka ~ 0.1
+    eta.cl ~ 0.1
+    eta.v  ~ 0.1
+
+    add.err  <- 0.3
+    prop.err <- 0.2
+  })
+
+  model({
+    ka <- exp(tka + eta.ka)
+    cl <- exp(tcl + eta.cl)
+    v  <- exp(tv  + eta.v)
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ add(add.err) + prop(prop.err)
+  })
+}
+
+```
+
+```{r}
+
+############################################################
+# 3. Model 2: no eta.ka model
+############################################################
+
+M2_no_eta_ka <- function() {
+  ini({
+    tka <- log(1)
+    tcl <- log(0.145)
+    tv  <- log(8.882)
+
+    eta.cl ~ 0.1
+    eta.v  ~ 0.1
+
+    add.err  <- 0.3
+    prop.err <- 0.2
+  })
+
+  model({
+    ka <- exp(tka)
+    cl <- exp(tcl + eta.cl)
+    v  <- exp(tv  + eta.v)
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ add(add.err) + prop(prop.err)
+  })
+}
+
+```
+
+```{r}
+
+############################################################
+# 4. Model 3: CL-only IIV model
+############################################################
+
+M2_CL_only <- function() {
+  ini({
+    tka <- log(1)
+    tcl <- log(0.145)
+    tv  <- log(8.882)
+
+    eta.cl ~ 0.1
+
+    add.err  <- 0.3
+    prop.err <- 0.2
+  })
+
+  model({
+    ka <- exp(tka)
+    cl <- exp(tcl + eta.cl)
+    v  <- exp(tv)
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ add(add.err) + prop(prop.err)
+  })
+}
+
+```
+
+```{r}
+
+############################################################
+# 5. Fit random effects models
+############################################################
+
+fit_M2_full_IIV <- nlmixr2(
+  M2_full_IIV,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "bobyqa",
+    optExpression = FALSE
+  )
+)
+
+fit_M2_no_eta_ka <- nlmixr2(
+  M2_no_eta_ka,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "bobyqa",
+    optExpression = FALSE
+  )
+)
+
+fit_M2_CL_only <- nlmixr2(
+  M2_CL_only,
+  pk_data,
+  est = "focei",
+  control = foceiControl(
+    outerOpt = "bobyqa",
+    optExpression = FALSE
+  )
+)
+
+```
+
+```{r}
+
+############################################################
+# 6. Random effects structure comparison table
+############################################################
+
+M2_compare <- tibble(
+  model_code = c(
+    "M2_full_IIV",
+    "M2_no_eta_ka",
+    "M2_CL_only"
+  ),
+  random_effects = c(
+    "eta.ka + eta.cl + eta.v",
+    "eta.cl + eta.v",
+    "eta.cl only"
+  ),
+  message = c(
+    paste(fit_M2_full_IIV$message, collapse = "; "),
+    paste(fit_M2_no_eta_ka$message, collapse = "; "),
+    paste(fit_M2_CL_only$message, collapse = "; ")
+  ),
+  OBJF = c(
+    fit_M2_full_IIV$objf,
+    fit_M2_no_eta_ka$objf,
+    fit_M2_CL_only$objf
+  ),
+  AIC = c(
+    AIC(fit_M2_full_IIV),
+    AIC(fit_M2_no_eta_ka),
+    AIC(fit_M2_CL_only)
+  ),
+  BIC = c(
+    BIC(fit_M2_full_IIV),
+    BIC(fit_M2_no_eta_ka),
+    BIC(fit_M2_CL_only)
+  ),
+  role = c(
+    "Reference model from M1",
+    "Reduced model without IIV on ka",
+    "Further reduced model retaining only IIV on CL/F"
+  )
+) %>%
+  mutate(
+    delta_OBJF_vs_full = OBJF - OBJF[model_code == "M2_full_IIV"],
+    delta_AIC_vs_full  = AIC  - AIC[model_code == "M2_full_IIV"],
+    delta_BIC_vs_full  = BIC  - BIC[model_code == "M2_full_IIV"]
+  )
+
+print(M2_compare, n = Inf, width = Inf)
+
+csv_output_file <- file.path(
+  output_dir,
+  "M2_random_effects_comparison_results.csv"
+)
+
+write_csv(
+  M2_compare,
+  csv_output_file
+)
+
+cat("CSV saved to:", csv_output_file, "\n")
+cat("CSV exists:", file.exists(csv_output_file), "\n")
+
+```
+
+```{r}
+############################################################
+# Xpose GOF plots for residual error model comparison
+############################################################
+
+library(xpose)
+library(xpose.nlmixr2)
+library(ggplot2)
+
+xp_full <- xpose_data_nlmixr(
+  fit_M2_full_IIV,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+xp_no_ka <- xpose_data_nlmixr(
+  fit_M2_no_eta_ka,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+xp_CL_only <- xpose_data_nlmixr(
+  fit_M2_CL_only,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+##DV vs PRED
+dv_vs_pred(xp_full)
+dv_vs_pred(xp_no_ka)
+dv_vs_pred(xp_CL_only)
+
+##DV vs IPRED
+dv_vs_ipred(xp_full)
+dv_vs_ipred(xp_no_ka)
+dv_vs_ipred(xp_CL_only)
+
+##CWRES vs TIME
+res_vs_idv(xp_full, res = "CWRES")
+res_vs_idv(xp_no_ka, res = "CWRES")
+res_vs_idv(xp_CL_only, res = "CWRES")
+
+##CWRES vs PRED
+res_vs_pred(xp_full, res = "CWRES")
+res_vs_pred(xp_no_ka, res = "CWRES")
+res_vs_pred(xp_CL_only, res = "CWRES")
+
+##Result output 
+pdf_output_file <- file.path(
+  output_dir,
+  "M2_Random_Effects_xpose_GOF_plots.pdf"
+)
+
+pdf(
+  pdf_output_file,
+  width = 8,
+  height = 6
+)
+
+print(dv_vs_pred(xp_full) + labs(caption = NULL))
+print(dv_vs_ipred(xp_full) + labs(caption = NULL))
+print(res_vs_idv(xp_full, res = "CWRES") + labs(caption = NULL))
+print(res_vs_pred(xp_full, res = "CWRES") + labs(caption = NULL))
+
+print(dv_vs_pred(xp_no_ka) + labs(caption = NULL))
+print(dv_vs_ipred(xp_no_ka) + labs(caption = NULL))
+print(res_vs_idv(xp_no_ka, res = "CWRES") + labs(caption = NULL))
+print(res_vs_pred(xp_no_ka, res = "CWRES") + labs(caption = NULL))
+
+print(dv_vs_pred(xp_CL_only) + labs(caption = NULL))
+print(dv_vs_ipred(xp_CL_only) + labs(caption = NULL))
+print(res_vs_idv(xp_CL_only, res = "CWRES") + labs(caption = NULL))
+print(res_vs_pred(xp_CL_only, res = "CWRES") + labs(caption = NULL))
+
+dev.off()
+
+cat("PDF saved to:", pdf_output_file, "\n")
+cat("PDF exists:", file.exists(pdf_output_file), "\n")
+
+```

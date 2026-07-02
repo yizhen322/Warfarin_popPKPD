@@ -1,0 +1,4 @@
+model_code,random_effects,message,OBJF,AIC,BIC,role,delta_OBJF_vs_full,delta_AIC_vs_full,delta_BIC_vs_full
+M2_full_IIV,eta.ka + eta.cl + eta.v,Normal exit from bobyqa,405.5094452192507,875.465080622359,903.5401873153828,Reference model from M1,0,0,0
+M2_no_eta_ka,eta.cl + eta.v,Normal exit from bobyqa,457.7822353173156,925.7378707204239,950.3035890768197,Reduced model without IIV on ka,52.27279009806489,50.27279009806489,46.76340176143685
+M2_CL_only,eta.cl only,Normal exit from bobyqa,499.23110586240875,965.1867412655171,986.2430712852849,Further reduced model retaining only IIV on CL/F,93.72166064315803,89.72166064315809,82.70288396990213
