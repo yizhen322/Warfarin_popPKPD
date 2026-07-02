@@ -87,6 +87,7 @@ pk_data <- dat_raw %>%
 
 names(pk_data)
 table(pk_data$EVID, pk_data$CMT)
+print(pk_data, n = 279)
 
 ```
 
