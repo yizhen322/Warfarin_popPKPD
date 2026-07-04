@@ -226,10 +226,20 @@ fit_baseM1_comb <- nlmixr2(
 
 ```
 
+```{r}
+############################################################
+# 6. Model parameters estimation results 
+############################################################
+
+fit_baseM1_add$parFixed
+fit_baseM1_prop$parFixed
+fit_baseM1_comb$parFixed
+
+```
 
 ```{r}
 ############################################################
-# 6. Residual error model comparison
+# 7. Residual error model comparison
 ############################################################
 
 error_compare <- tibble(
@@ -301,7 +311,7 @@ cat("CSV exists:", file.exists(csv_output_file), "\n")
 
 ```{r}
 ############################################################
-# Xpose GOF plots for residual error model comparison
+# 8. Xpose GOF plots for residual error model comparison
 ############################################################
 
 library(xpose)
