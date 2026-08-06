@@ -227,9 +227,80 @@ fit_M2_CL_only <- nlmixr2(
 ```
 
 ```{r}
+############################################################
+# 6. M2 parameter estimation tables using nlmixr2rpt
+############################################################
+
+library(nlmixr2rpt)
+library(onbrand)
+library(flextable)
+
+obnd <- onbrand::read_template(
+  template = system.file(
+    package = "nlmixr2rpt",
+    "templates",
+    "nlmixr_obnd_template.docx"
+  ),
+  mapping = system.file(
+    package = "nlmixr2rpt",
+    "templates",
+    "nlmixr_obnd_template.yaml"
+  )
+)
+
+rpt_yaml <- system.file(
+  package = "nlmixr2rpt",
+  "templates",
+  "report_fit.yaml"
+)
+
+get_rpt_table <- function(fit, caption) {
+
+  rptdetails <- nlmixr2rpt::yaml_read_fit(
+    obnd    = obnd,
+    rptyaml = rpt_yaml,
+    fit     = fit
+  )$rptdetails
+
+  result <- nlmixr2rpt::gen_pest_table(
+    obnd       = obnd,
+    fit        = fit,
+    rptdetails = rptdetails,
+    verbose    = FALSE
+  )
+
+  flextable::set_caption(
+    result$ft[[1]],
+    caption = caption
+  )
+}
+
+M2_full_table <- get_rpt_table(
+  fit_M2_full_IIV,
+  "M2 full-IIV model: Parameter estimates"
+)
+
+M2_no_eta_ka_table <- get_rpt_table(
+  fit_M2_no_eta_ka,
+  "M2 model without IIV on Ka: Parameter estimates"
+)
+
+M2_CL_only_table <- get_rpt_table(
+  fit_M2_CL_only,
+  "M2 CL-only IIV model: Parameter estimates"
+)
+
+M2_full_table
+M2_no_eta_ka_table
+M2_CL_only_table
+
+
+```
+
+```{r}
 
 ############################################################
-# 6. Random effects structure comparison table
+# 7. Random effects structure comparison table
 ############################################################
 
 M2_compare <- tibble(
@@ -294,7 +365,7 @@ cat("CSV exists:", file.exists(csv_output_file), "\n")
 
 ```{r}
 ############################################################
-# Xpose GOF plots for residual error model comparison
+# 8. Xpose GOF plots for residual error model comparison
 ############################################################
 
 library(xpose)

@@ -1,0 +1,475 @@
+---
+title: "M3A_Covariates_QC"
+author: "Yizhen Lai"
+date: "2026-08-06"
+output: html_document
+---
+
+```{r}
+############################################################
+# M3A-1. Covariate data preparation and descriptive statistics
+############################################################
+
+library(dplyr)
+library(tidyr)
+library(readr)
+library(here)
+
+# 1. Read the cleaned modeling dataset
+m3_data <- read_csv(
+  here("Data", "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"),
+  show_col_types = FALSE
+)
+
+# Check actual column names
+names(m3_data)
+
+# 2. Check whether baseline covariates are consistent within each ID
+covariate_consistency <- m3_data %>%
+  group_by(id) %>%
+  summarise(
+    n_WT  = n_distinct(wt[!is.na(wt)]),
+    n_AGE = n_distinct(age[!is.na(age)]),
+    n_SEX = n_distinct(sex[!is.na(sex)]),
+    .groups = "drop"
+  )
+
+inconsistent_ids <- covariate_consistency %>%
+  filter(n_WT > 1 | n_AGE > 1 | n_SEX > 1)
+
+inconsistent_ids
+
+# 3. Create one subject-level covariate record per ID
+cov_subject <- m3_data %>%
+  select(id, wt, age, sex) %>%
+  distinct() %>%
+  arrange(id)
+
+cov_subject
+
+# 4. Continuous covariate summary
+continuous_summary <- cov_subject %>%
+  select(wt, age) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "covariate",
+    values_to = "value"
+  ) %>%
+  group_by(covariate) %>%
+  summarise(
+    n       = sum(!is.na(value)),
+    missing = sum(is.na(value)),
+    mean    = mean(value, na.rm = TRUE),
+    sd      = sd(value, na.rm = TRUE),
+    median  = median(value, na.rm = TRUE),
+    q1      = unname(quantile(value, 0.25, na.rm = TRUE)),
+    q3      = unname(quantile(value, 0.75, na.rm = TRUE)),
+    minimum = min(value, na.rm = TRUE),
+    maximum = max(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    covariate = toupper(covariate),
+    across(
+      c(mean, sd, median, q1, q3, minimum, maximum),
+      ~ round(.x, 2)
+    )
+  ) %>%
+  as.data.frame()
+
+continuous_summary
+
+# 5. Categorical covariate summary
+sex_summary <- cov_subject %>%
+  mutate(
+    sex = ifelse(
+      is.na(sex),
+      "Missing",
+      as.character(sex)
+    )
+  ) %>%
+  count(
+    sex,
+    name = "n",
+    .drop = FALSE
+  ) %>%
+  mutate(
+    percent = round(100 * n / sum(n), 1)
+  ) %>%
+  rename(
+    SEX = sex,
+    N = n,
+    Percent = percent
+  ) %>%
+  as.data.frame()
+
+sex_summary
+
+```
+
+```{r}
+
+############################################################
+# M3A-2. Pearson correlation between WT and AGE
+############################################################
+
+library(dplyr)
+library(tibble)
+
+pearson_data <- cov_subject %>%
+  transmute(
+    id  = as.character(id),
+    wt  = as.numeric(wt),
+    age = as.numeric(age)
+  ) %>%
+  filter(
+    complete.cases(wt, age)
+  )
+
+if (nrow(pearson_data) < 3) {
+  stop("Fewer than three subjects have complete WT and AGE data.")
+}
+
+# Pearson correlation test for WT-AGE
+pearson_test <- cor.test(
+  x = pearson_data$wt,
+  y = pearson_data$age,
+  method = "pearson",
+  conf.level = 0.95
+)
+
+# Report-ready result table
+pearson_result <- tibble(
+  Relationship = "WT vs AGE",
+  N = nrow(pearson_data),
+  Pearson_r = round(unname(pearson_test$estimate), 3),
+  CI_lower = round(pearson_test$conf.int[1], 3),
+  CI_upper = round(pearson_test$conf.int[2], 3),
+  P_value = signif(pearson_test$p.value, 3)
+)
+
+pearson_result
+
+# Scatter Plot for WT-AGE co-linearity
+
+library(ggplot2)
+
+pearson_subtitle <- sprintf(
+  "Pearson r = %.3f; 95%% CI: %.3f to %.3f; N = %d",
+  unname(pearson_test$estimate),
+  pearson_test$conf.int[1],
+  pearson_test$conf.int[2],
+  nrow(pearson_data)
+)
+
+plot_wt_age <- ggplot(
+  pearson_data,
+  aes(x = wt, y = age)
+) +
+  geom_point(
+    size = 2.5,
+    alpha = 0.8
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = TRUE
+  ) +
+  theme_bw() +
+  labs(
+    title = "Correlation Between Body Weight and Age",
+    subtitle = pearson_subtitle,
+    x = "Body Weight",
+    y = "Age"
+  )
+
+plot_wt_age
+
+```
+
+```{r}
+############################################################
+# M3A-3. WT and AGE correlating to SEX
+############################################################
+
+library(dplyr)
+library(ggplot2)
+
+# Prepare subject-level data
+sex_plot_data <- cov_subject %>%
+  mutate(
+    wt = as.numeric(wt),
+    age = as.numeric(age),
+    sex_group = factor(sex)
+  ) %>%
+  filter(!is.na(sex_group))
+
+
+# WT-SEX Correlation
+
+plot_wt_sex <- ggplot(
+  sex_plot_data,
+  aes(x = sex_group, y = wt)
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    na.rm = TRUE
+  ) +
+  geom_jitter(
+    width = 0.10,
+    height = 0,
+    size = 2,
+    alpha = 0.8,
+    na.rm = TRUE
+  ) +
+  theme_bw() +
+  labs(
+    title = "Body Weight by Sex",
+    x = "Sex group",
+    y = "Body Weight"
+  )
+
+plot_wt_sex
+
+# AGE-SEX Correlation
+
+plot_age_sex <- ggplot(
+  sex_plot_data,
+  aes(x = sex_group, y = age)
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    na.rm = TRUE
+  ) +
+  geom_jitter(
+    width = 0.10,
+    height = 0,
+    size = 2,
+    alpha = 0.8,
+    na.rm = TRUE
+  ) +
+  theme_bw() +
+  labs(
+    title = "Age by Sex",
+    x = "Sex group",
+    y = "Age"
+  )
+
+plot_age_sex
+
+```
+```{r}
+############################################################
+# M3A-4. ETA-covariate exploratory analysis
+############################################################
+
+library(dplyr)
+library(ggplot2)
+
+# Organizing eta estimates from the selected base model in M2
+
+fit_m3_base <- fit_M2_full_IIV    #YOU HAVE TO RUN M2 FIRST TO RUN THIS SECTION
+fit_m3_data <- as.data.frame(fit_m3_base)
+eta_subject <- fit_m3_data %>%
+  transmute(
+    id = as.character(ID),
+    eta_cl = eta.cl,
+    eta_v  = eta.v
+  ) %>%
+  group_by(id) %>%
+  summarise(
+    eta_cl = first(eta_cl),
+    eta_v  = first(eta_v),
+    .groups = "drop"
+  )
+
+# Merge ETA estimates with the subject-level covariate dataset
+eta_cov_data <- cov_subject %>%
+  mutate(
+    id = as.character(id),
+    wt = as.numeric(wt),
+    age = as.numeric(age),
+    sex_group = factor(sex)
+  ) %>%
+  left_join(
+    eta_subject,
+    by = "id"
+  )
+
+eta_cov_data
+```
+
+```{r}
+# ETA(CL/F) vs body weight
+plot_eta_cl_wt <- ggplot(
+  eta_cov_data,
+  aes(x = wt, y = eta_cl)
+) +
+  geom_point(
+    size = 2.5,
+    alpha = 0.8
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = TRUE
+  ) +
+  theme_bw() +
+  labs(
+    title = "ETA(CL/F) vs Body Weight",
+    x = "Body Weight (kg)",
+    y = "ETA(CL/F)"
+  )
+
+plot_eta_cl_wt
+```
+
+```{r}
+# ETA(CL/F) vs age
+plot_eta_cl_age <- ggplot(
+  eta_cov_data,
+  aes(x = age, y = eta_cl)
+) +
+  geom_point(
+    size = 2.5,
+    alpha = 0.8
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = TRUE
+  ) +
+  theme_bw() +
+  labs(
+    title = "ETA(CL/F) vs Age",
+    x = "Age (years)",
+    y = "ETA(CL/F)"
+  )
+
+plot_eta_cl_age
+```
+
+```{r}
+# ETA(V/F) vs body weight
+plot_eta_v_wt <- ggplot(
+  eta_cov_data,
+  aes(x = wt, y = eta_v)
+) +
+  geom_point(
+    size = 2.5,
+    alpha = 0.8
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = TRUE
+  ) +
+  theme_bw() +
+  labs(
+    title = "ETA(V/F) vs Body Weight",
+    x = "Body Weight (kg)",
+    y = "ETA(V/F)"
+  )
+
+plot_eta_v_wt
+```
+
+```{r}
+# ETA(CL/F) vs age
+plot_eta_cl_age <- ggplot(
+  eta_cov_data,
+  aes(x = age, y = eta_cl)
+) +
+  geom_point(
+    size = 2.5,
+    alpha = 0.8
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = TRUE
+  ) +
+  theme_bw() +
+  labs(
+    title = "ETA(CL/F) vs Age",
+    x = "Age (years)",
+    y = "ETA(CL/F)"
+  )
+
+plot_eta_cl_age
+```
+```{r}
+# ETA(CL/F) by sex
+plot_eta_cl_sex <- ggplot(
+  eta_cov_data,
+  aes(x = sex_group, y = eta_cl)
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    na.rm = TRUE
+  ) +
+  geom_jitter(
+    width = 0.10,
+    height = 0,
+    size = 2,
+    alpha = 0.8,
+    na.rm = TRUE
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  theme_bw() +
+  labs(
+    title = "ETA(CL/F) by Sex",
+    x = "Sex group",
+    y = "ETA(CL/F)"
+  )
+
+plot_eta_cl_sex
+
+# ETA(V/F) by sex
+plot_eta_v_sex <- ggplot(
+  eta_cov_data,
+  aes(x = sex_group, y = eta_v)
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    na.rm = TRUE
+  ) +
+  geom_jitter(
+    width = 0.10,
+    height = 0,
+    size = 2,
+    alpha = 0.8,
+    na.rm = TRUE
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  theme_bw() +
+  labs(
+    title = "ETA(V/F) by Sex",
+    x = "Sex group",
+    y = "ETA(V/F)"
+  )
+
+plot_eta_v_sex
+```

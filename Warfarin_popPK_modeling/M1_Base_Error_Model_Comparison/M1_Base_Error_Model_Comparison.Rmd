@@ -231,15 +231,74 @@ fit_baseM1_comb <- nlmixr2(
 # 6. Model parameters estimation results 
 ############################################################
 
-fit_baseM1_add$parFixed
-fit_baseM1_prop$parFixed
-fit_baseM1_comb$parFixed
+library(nlmixr2rpt)
+library(onbrand)
+library(flextable)
+
+obnd <- onbrand::read_template(
+  template = system.file(
+    package = "nlmixr2rpt",
+    "templates",
+    "nlmixr_obnd_template.docx"
+  ),
+  mapping = system.file(
+    package = "nlmixr2rpt",
+    "templates",
+    "nlmixr_obnd_template.yaml"
+  )
+)
+
+rpt_yaml <- system.file(
+  package = "nlmixr2rpt",
+  "templates",
+  "report_fit.yaml"
+)
+
+get_rpt_table <- function(fit, caption) {
+
+  rptdetails <- nlmixr2rpt::yaml_read_fit(
+    obnd    = obnd,
+    rptyaml = rpt_yaml,
+    fit     = fit
+  )$rptdetails
+
+  result <- nlmixr2rpt::gen_pest_table(
+    obnd       = obnd,
+    fit        = fit,
+    rptdetails = rptdetails,
+    verbose    = FALSE
+  )
+
+  flextable::set_caption(
+    result$ft[[1]],
+    caption = caption
+  )
+}
+
+M1_add_table <- get_rpt_table(
+  fit_baseM1_add,
+  "M1 additive error model: Parameter estimates"
+)
+
+M1_prop_table <- get_rpt_table(
+  fit_baseM1_prop,
+  "M1 proportional error model: Parameter estimates"
+)
+
+M1_comb_table <- get_rpt_table(
+  fit_baseM1_comb,
+  "M1 combined error model: Parameter estimates"
+)
+
+M1_add_table
+M1_prop_table
+M1_comb_table
 
 ```
 
 ```{r}
 ############################################################
-# 7. Residual error model comparison
+# 7. Residual error model comparison summary output
 ############################################################
 
 error_compare <- tibble(
