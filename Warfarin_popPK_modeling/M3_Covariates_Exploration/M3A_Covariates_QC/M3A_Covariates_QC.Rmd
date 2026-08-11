@@ -16,16 +16,16 @@ library(readr)
 library(here)
 
 # 1. Read the cleaned modeling dataset
-m3_data <- read_csv(
+M3_data <- read_csv(
   here("Data", "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"),
   show_col_types = FALSE
 )
 
 # Check actual column names
-names(m3_data)
+names(M3_data)
 
 # 2. Check whether baseline covariates are consistent within each ID
-covariate_consistency <- m3_data %>%
+covariate_consistency <- M3_data %>%
   group_by(id) %>%
   summarise(
     n_WT  = n_distinct(wt[!is.na(wt)]),
@@ -40,7 +40,7 @@ inconsistent_ids <- covariate_consistency %>%
 inconsistent_ids
 
 # 3. Create one subject-level covariate record per ID
-cov_subject <- m3_data %>%
+cov_subject <- M3_data %>%
   select(id, wt, age, sex) %>%
   distinct() %>%
   arrange(id)
@@ -268,9 +268,9 @@ library(ggplot2)
 
 # Organizing eta estimates from the selected base model in M2
 
-fit_m3_base <- fit_M2_full_IIV    #YOU HAVE TO RUN M2 FIRST TO RUN THIS SECTION
-fit_m3_data <- as.data.frame(fit_m3_base)
-eta_subject <- fit_m3_data %>%
+fit_M3_base <- fit_M2_full_IIV    #YOU HAVE TO RUN M2 FIRST TO RUN THIS SECTION
+fit_M3_data <- as.data.frame(fit_M3_base)
+eta_subject <- fit_M3_data %>%
   transmute(
     id = as.character(ID),
     eta_cl = eta.cl,
@@ -387,10 +387,10 @@ plot_eta_v_wt
 ```
 
 ```{r}
-# ETA(CL/F) vs age
-plot_eta_cl_age <- ggplot(
+# ETA(V/F) vs age
+plot_eta_v_age <- ggplot(
   eta_cov_data,
-  aes(x = age, y = eta_cl)
+  aes(x = age, y = eta_v)
 ) +
   geom_point(
     size = 2.5,
@@ -407,12 +407,13 @@ plot_eta_cl_age <- ggplot(
   ) +
   theme_bw() +
   labs(
-    title = "ETA(CL/F) vs Age",
+    title = "ETA(V/F) vs Age",
     x = "Age (years)",
-    y = "ETA(CL/F)"
+    y = "ETA(V/F)"
   )
 
-plot_eta_cl_age
+plot_eta_v_age
+
 ```
 ```{r}
 # ETA(CL/F) by sex
@@ -472,4 +473,74 @@ plot_eta_v_sex <- ggplot(
   )
 
 plot_eta_v_sex
+```
+
+```{r}
+############################################################
+# M3A-3. ggplots output
+############################################################
+
+# WT vs AGE
+ggsave(
+  "M3A_WT_vs_AGE.png",
+  plot = plot_wt_age,
+  width = 7, height = 5, dpi = 300
+)
+
+# WT by SEX
+ggsave(
+  "M3A_WT_by_SEX.png",
+  plot = plot_wt_sex,
+  width = 7, height = 5, dpi = 300
+)
+
+# AGE by SEX
+ggsave(
+  "M3A_AGE_by_SEX.png",
+  plot = plot_age_sex,
+  width = 7, height = 5, dpi = 300
+)
+
+# ETA(CL/F) vs WT
+ggsave(
+  "M3A_ETA_CL_vs_WT.png",
+  plot = plot_eta_cl_wt,
+  width = 7, height = 5, dpi = 300
+)
+
+# ETA(CL/F) vs AGE
+ggsave(
+  "M3A_ETA_CL_vs_AGE.png",
+  plot = plot_eta_cl_age,
+  width = 7, height = 5, dpi = 300
+)
+
+# ETA(CL/F) by SEX
+ggsave(
+  "M3A_ETA_CL_by_SEX.png",
+  plot = plot_eta_cl_sex,
+  width = 7, height = 5, dpi = 300
+)
+
+# ETA(V/F) vs WT
+ggsave(
+  "M3A_ETA_V_vs_WT.png",
+  plot = plot_eta_v_wt,
+  width = 7, height = 5, dpi = 300
+)
+
+# ETA(V/F) vs AGE
+ggsave(
+  "M3A_ETA_V_vs_AGE.png",
+  plot = plot_eta_v_age,
+  width = 7, height = 5, dpi = 300
+)
+
+# ETA(V/F) by SEX
+ggsave(
+  "M3A_ETA_V_by_SEX.png",
+  plot = plot_eta_v_sex,
+  width = 7, height = 5, dpi = 300
+)
+
 ```

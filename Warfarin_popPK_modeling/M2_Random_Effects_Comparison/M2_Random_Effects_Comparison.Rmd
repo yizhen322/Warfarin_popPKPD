@@ -51,6 +51,15 @@ rxode2::setRxThreads(1)
 
 cat("rxode2 threads:", rxode2::getRxThreads(), "\n")
 
+############################################################
+# Common PopPK fitting control
+# Selected from M0 estimation-setting QC
+############################################################
+
+popPK_control <- nlmixr2est::foceiControl(
+  outerOpt = "bobyqa",
+  optExpression = FALSE
+)
 ```
 
 ```{r}
@@ -196,32 +205,23 @@ M2_CL_only <- function() {
 
 fit_M2_full_IIV <- nlmixr2(
   M2_full_IIV,
-  pk_data,
+  data = pk_data,
   est = "focei",
-  control = foceiControl(
-    outerOpt = "bobyqa",
-    optExpression = FALSE
-  )
+  control = popPK_control
 )
 
 fit_M2_no_eta_ka <- nlmixr2(
   M2_no_eta_ka,
-  pk_data,
+  data = pk_data,
   est = "focei",
-  control = foceiControl(
-    outerOpt = "bobyqa",
-    optExpression = FALSE
-  )
+  control = popPK_control
 )
 
 fit_M2_CL_only <- nlmixr2(
   M2_CL_only,
-  pk_data,
+  data = pk_data,
   est = "focei",
-  control = foceiControl(
-    outerOpt = "bobyqa",
-    optExpression = FALSE
-  )
+  control = popPK_control
 )
 
 ```
