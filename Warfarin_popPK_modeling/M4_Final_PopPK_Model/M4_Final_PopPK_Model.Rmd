@@ -1,0 +1,142 @@
+---
+title: "M4_Final_PopPK_Model_Evaluation"
+author: "Yizhen Lai"
+date: "2026-08-18"
+output: html_document
+---
+
+```{r}
+############################################################
+# Final PopPK model evaluation
+# A: Parameter precision / stability
+############################################################
+
+M4_Final_PopPK_model <- Final_PopPK_structure
+
+# Check model structure
+M4_Final_PopPK_model
+
+# Model fitting with control
+fit_M4_Final_PopPK_model <- nlmixr2(
+  M4_Final_PopPK_model,
+  data = M3B_data,
+  est  = "focei",
+  control = popPK_control_M3B
+)
+
+# Fixed effects + SE + RSE + 95% CI + BSV + shrinkage
+fit_M4_Final_PopPK_model$parFixedDf
+
+# Random-effects variance
+fit_M4_Final_PopPK_model$omega
+
+# Shrinkage / ETA distribution information
+fit_M4_Final_PopPK_model$shrink
+
+# Covariance estimation
+fit_M4_Final_PopPK_model$covMethod
+
+# Minimization message
+fit_M4_Final_PopPK_model$message
+
+# Run warnings / information
+fit_M4_Final_PopPK_model$runInfo
+
+```
+
+```{r}
+library(xpose)
+library(xpose.nlmixr2)
+library(ggplot2)
+
+xp_M4_Final_PopPK_Model <- xpose_data_nlmixr(
+  fit_M4_Final_PopPK_model,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+xp_M3_full_candidate <- xpose_data_nlmixr(
+  fit_M3B_full_candidate,
+  xp_theme = theme_xp_nlmixr2()
+)
+
+## DV vs CPRED
+p1 <- dv_vs_pred(
+  xp_M3_full_candidate,
+  title = "DV vs. CPRED | M4 Final PopPK",
+  subtitle = "Ofv: @ofv",
+  caption = NULL
+)
+
+
+## DV vs IPRED
+p2 <- dv_vs_ipred(
+  xp_M3_full_candidate,
+  title = "DV vs. IPRED | M4 Final PopPK",
+  subtitle = "Ofv: @ofv, Eps shrink: @epsshk",
+  caption = NULL
+)
+
+
+## CWRES vs TIME
+p3 <- res_vs_idv(
+  xp_M3_full_candidate,
+  res = "CWRES",
+  title = "CWRES vs. TIME | M4 Final PopPK",
+  subtitle = "Ofv: @ofv",
+  caption = NULL
+)
+
+
+## CWRES vs CPRED
+p4 <- res_vs_pred(
+  xp_M3_full_candidate,
+  res = "CWRES",
+  title = "CWRES vs. CPRED | M4 Final PopPK",
+  subtitle = "Ofv: @ofv",
+  caption = NULL
+)
+
+p1
+p2
+p3
+p4
+
+```
+
+```{r}
+
+library(rxode2)
+library(vpc)
+library(dplyr)
+library(ggplot2)
+
+############################################################
+# M4 Final PopPK model - VPC
+############################################################
+
+p_vpc_M4 <- vpcPlot(
+  fit_M3_WT_allo_V_allo_CL,
+  n = 1000,
+  show = list(obs_dv = TRUE),
+  xlab = "Time (h)",
+  ylab = "Concentration",
+  title = "VPC | M4 Final PopPK"
+)
+
+p_vpc_M4
+
+p_vpc_M4_QC <- vpcPlot(
+  fit_M4_Final_PopPK_model,
+  n = 1000,
+  bins = "time",
+  smooth = TRUE,
+  show = list(obs_dv = TRUE),
+  xlab = "Time (h)",
+  ylab = "Concentration",
+  title = "VPC | M4 Final PopPK"
+)
+
+p_vpc_M4_QC
+
+
+```

@@ -68,13 +68,26 @@ pk_data <- dat_raw %>%
     DV   = ifelse(evid == 1, NA_real_, as.numeric(dv)),
     AMT  = ifelse(evid == 1, as.numeric(amt), 0),
     EVID = as.integer(evid),
-    CMT  = ifelse(EVID == 1, "depot", "central")
+    CMT  = ifelse(EVID == 1, "depot", "central"),
+
+    WT   = as.numeric(wt),
+    AGE  = as.numeric(age),
+    SEX  = tolower(trimws(as.character(sex)))
   ) %>%
-  select(ID, TIME, DV, AMT, EVID, CMT) %>%
+  select(
+    ID, TIME, DV, AMT, EVID, CMT,
+    WT, AGE, SEX
+  ) %>%
   arrange(ID, TIME, desc(EVID))
+
 
 names(pk_data)
 table(pk_data$EVID, pk_data$CMT)
+print(pk_data, n=279)
+
+```
+
+```{r}
 
 ############################################################
 # 2. Define base one-compartment proportional error model

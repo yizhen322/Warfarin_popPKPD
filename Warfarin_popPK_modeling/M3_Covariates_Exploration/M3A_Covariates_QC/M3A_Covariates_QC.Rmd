@@ -16,16 +16,16 @@ library(readr)
 library(here)
 
 # 1. Read the cleaned modeling dataset
-M3_data <- read_csv(
+M3A_data <- read_csv(
   here("Data", "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"),
   show_col_types = FALSE
 )
 
 # Check actual column names
-names(M3_data)
+names(M3A_data)
 
 # 2. Check whether baseline covariates are consistent within each ID
-covariate_consistency <- M3_data %>%
+covariate_consistency <- M3A_data %>%
   group_by(id) %>%
   summarise(
     n_WT  = n_distinct(wt[!is.na(wt)]),
@@ -40,7 +40,7 @@ inconsistent_ids <- covariate_consistency %>%
 inconsistent_ids
 
 # 3. Create one subject-level covariate record per ID
-cov_subject <- M3_data %>%
+cov_subject <- M3A_data %>%
   select(id, wt, age, sex) %>%
   distinct() %>%
   arrange(id)
@@ -269,8 +269,8 @@ library(ggplot2)
 # Organizing eta estimates from the selected base model in M2
 
 fit_M3_base <- fit_M2_full_IIV    #YOU HAVE TO RUN M2 FIRST TO RUN THIS SECTION
-fit_M3_data <- as.data.frame(fit_M3_base)
-eta_subject <- fit_M3_data %>%
+M3_base_fit_df <- as.data.frame(fit_M3_base)
+eta_subject <- M3_base_fit_df %>%
   transmute(
     id = as.character(ID),
     eta_cl = eta.cl,

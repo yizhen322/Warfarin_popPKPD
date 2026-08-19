@@ -1,0 +1,3 @@
+model_code,method,setting,message,OBJF,AIC,BIC,role
+FOCEI_NLMINB_1T,FOCEi,1 thread + nlminb + optExpression TRUE,false convergence (8),465.35817523098706,933.3138106340954,957.8795289904912,FOCEi setting comparison
+FOCEI_BOBYQA_1T,FOCEi,1 thread + bobyqa + optExpression FALSE,Normal exit from bobyqa,461.49408247301,929.4497178761183,954.015436232514,FOCEi setting comparison; recommended formal setting

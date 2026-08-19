@@ -1,0 +1,538 @@
+---
+title: "M3B_Covariates_Forward_Comparison"
+author: "Yizhen Lai"
+date: "2026-08-07"
+output: html_document
+---
+
+```{r}
+############################################################
+# PopPK Fitting Control
+# bobyqa + optExpression FALSE + single thread
+############################################################
+
+# Single-thread setting
+rxode2::setRxThreads(1)
+
+cat("rxode2 threads:", rxode2::getRxThreads(), "\n")
+
+
+# Common PopPK fitting control
+popPK_control <- nlmixr2est::foceiControl(
+  outerOpt = "bobyqa",
+  optExpression = FALSE
+)
+
+############################################################
+# M3B session: robust PopPK fitting control
+############################################################
+
+# Keep single thread for stability
+rxode2::setRxThreads(1)
+
+# Robust FOCEi control for this modeling session
+popPK_control_M3B <- nlmixr2est::foceiControl(
+  outerOpt      = "bobyqa",
+  optExpression = FALSE,
+
+  # Optimization / ODE precision
+  sigdig        = 4,
+
+  # Automatic retry when a fit fails
+  nRetries      = 10L,
+  seed          = 123L,
+
+  # Covariance / output
+  covMethod     = "r,s",
+  calcTables    = TRUE
+)
+
+```
+
+```{r}
+############################################################
+# M3B-1. Covariates Data Preparation for Modeling
+############################################################
+
+library(readr)
+library(dplyr)
+library(here)
+
+# Original PK data
+dat_raw <- read_csv(
+  here("Data", "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"),
+  show_col_types = FALSE
+)
+
+
+pk_data <- dat_raw %>%
+  filter(evid == 1 | (evid == 0 & dvid == "cp")) %>%
+  mutate(
+    ID   = as.integer(id),
+    TIME = as.numeric(time),
+    DV   = ifelse(evid == 1, NA_real_, as.numeric(dv)),
+    AMT  = ifelse(evid == 1, as.numeric(amt), 0),
+    EVID = as.integer(evid),
+    CMT  = ifelse(EVID == 1, "depot", "central"),
+
+    WT   = as.numeric(wt),
+    AGE  = as.numeric(age),
+    SEX  = tolower(trimws(as.character(sex)))
+  ) %>%
+  select(
+    ID, TIME, DV, AMT, EVID, CMT,
+    WT, AGE, SEX
+  ) %>%
+  arrange(ID, TIME, desc(EVID))
+
+# One row per subject
+cov_ref <- pk_data %>%
+  distinct(ID, WT, AGE, SEX)
+
+# Reference values based on subjects, not PK records
+WT_REF  <- median(cov_ref$WT, na.rm = TRUE)
+AGE_REF <- median(cov_ref$AGE, na.rm = TRUE)
+
+WT_REF
+AGE_REF
+
+# Add model-ready covariates directly to pk_data
+M3B_data <- pk_data %>%
+  mutate(
+    WT_RATIO  = WT / WT_REF,
+    AGE_RATIO = AGE / AGE_REF,
+    SEX_REF  = ifelse(SEX == "male", 1, 0)
+  )
+
+names(M3B_data)
+table(M3B_data$EVID, M3B_data$CMT)
+print(M3B_data, n=279)
+
+```
+
+```{r}
+############################################################
+# M3B-2. M3 Base Model
+
+# Base structure selected from M2 full-IIV
+
+# Initial values inherited from the final M2 estimates
+
+# YOU MUST RUN M2 Rmd TO RUN THIS SESSION
+############################################################
+
+# Define M3 base model using the FINAL estimates from M2_full_IIV
+M3_base <- fit_M2_full_IIV$finalUi
+
+# Check inherited initial values
+M3_base
+
+# Fit the M3 base model
+fit_M3_base <- nlmixr2(
+  M3_base,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+############################################################
+# M3B-3. M3 base model + Body weight on V/F
+############################################################
+
+# Free exponent model
+M3_WT_V <- M3_base %>%
+  model({
+
+    v <- exp(
+      tv +
+      theta_WT_V * log(WT_RATIO) +
+      eta.v
+    )
+
+  }) %>%
+  
+  ini(
+    theta_WT_V = 0.93
+  )
+
+# Allometric scaling on V/F, fixed 1
+M3_WT_allo_V <- M3_base %>%
+  model({
+
+    v <- exp(
+      tv +
+      1 * log(WT_RATIO) +
+      eta.v
+    )
+
+  }) 
+
+# Check full model structure
+M3_WT_V
+M3_WT_allo_V
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+fit_M3_WT_V <- nlmixr2(
+  M3_WT_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+fit_M3_WT_allo_V <- nlmixr2(
+  M3_WT_allo_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+```
+
+```{r}
+############################################################
+# M3B-4. M3 base model + Body Weight (allo) and Sex on V/F
+############################################################
+
+M3_WT_allo_V_SEX_V <- M3_base %>%
+  model({
+
+    v <- exp(
+      tv +
+      log(WT_RATIO) +
+      theta_SEX_V * SEX_REF +
+      eta.v
+    )
+
+  }) %>%
+  
+  ini(
+    theta_SEX_V = 0.75
+  )
+
+# Check full model structure
+M3_WT_allo_V_SEX_V
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+
+fit_M3_WT_allo_V_SEX_V <- nlmixr2(
+  M3_WT_allo_V_SEX_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+```
+
+```{r}
+############################################################
+# M3B-5. M3 base model + Body weight on CL/F
+############################################################
+
+# Free exponent model
+M3_WT_CL <- M3_base %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      theta_WT_CL * log(WT_RATIO) +
+      eta.cl
+    )
+
+  }) %>%
+  
+  ini(
+    theta_WT_CL = 0.63
+  )
+
+# Allometric scaling on V/F, fixed 0.75
+M3_WT_allo_CL <- M3_base %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      0.75 * log(WT_RATIO) +
+      eta.cl
+    )
+
+  }) 
+
+# Check full model structure
+M3_WT_CL
+M3_WT_allo_CL
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+fit_M3_WT_CL <- nlmixr2(
+  M3_WT_CL,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+fit_M3_WT_allo_CL <- nlmixr2(
+  M3_WT_allo_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+
+############################################################
+# M3B-6. M3 base model + Body weight on V/F (allo) and CL/F
+############################################################
+
+# Free exponent model
+M3_WT_allo_V_CL <- M3_base %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      theta_WT_CL * log(WT_RATIO) +
+      eta.cl
+    )
+    
+    v <- exp(
+      tv +
+      log(WT_RATIO) +
+      eta.v
+    )
+
+  }) %>%
+  
+  ini(
+    theta_WT_CL = 0.61,
+  )
+
+# Allometric scaling on V/F, fixed 1
+M3_WT_allo_V_allo_CL <- M3_base %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      0.75 * log(WT_RATIO) +
+      eta.cl
+    )
+    
+    v <- exp(
+      tv +
+      log(WT_RATIO) +
+      eta.v
+    )
+
+  }) 
+
+# Check full model structure
+M3_WT_allo_V_CL
+M3_WT_allo_V_allo_CL
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+fit_M3_WT_allo_V_CL <- nlmixr2(
+  M3_WT_allo_V_CL,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+fit_M3_WT_allo_V_allo_CL <- nlmixr2(
+  M3_WT_allo_V_allo_CL,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+############################################################
+#M3B_7. M3 base model + AGE on CL/F
+############################################################
+
+M3_AGE_CL <- fit_M3_base %>%
+  model({
+    cl <- exp(
+      tcl +
+      theta_AGE_CL * log(AGE_RATIO) +
+      eta.cl
+    )
+    
+  }) %>%
+  
+  ini(
+    theta_AGE_CL = 0.31
+  )
+
+# Check Model Structure
+M3_AGE_CL
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+
+fit_M3_AGE_CL <- nlmixr2(
+  M3_AGE_CL,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+```{r}
+############################################################
+#M3B_7. M3 base model + AGE on V/F
+############################################################
+
+M3_AGE_V <- fit_M3_base %>%
+  model({
+    v <- exp(
+      tv +
+      theta_AGE_V * log(AGE_RATIO) +
+      eta.v
+    )
+    
+  }) %>%
+  
+  ini(
+    theta_AGE_V = 0.75
+  )
+
+# Check Model Structure
+M3_AGE_V
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+
+fit_M3_AGE_V <- nlmixr2(
+  M3_AGE_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+
+############################################################
+# M3B-8. Body Weight on CL/F and V/F + Age on CL/F
+############################################################
+
+M3_WT_allo_V_allo_CL_AGE_CL <- M3_base %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      0.75 * log(WT_RATIO) +
+      theta_AGE_CL * log(AGE_RATIO) +
+      eta.cl
+    )
+    
+    v <- exp(
+      tv +
+      log(WT_RATIO) +
+      eta.v
+    )
+
+  }) %>%
+  
+  ini(
+    theta_AGE_CL = 0.36
+  )
+  
+# Check Model Structure
+M3_WT_allo_V_allo_CL_AGE_CL
+
+# ----------------------------------------------------------
+# Fit the Model
+# ----------------------------------------------------------
+
+fit_M3_WT_allo_V_allo_CL_AGE_CL <- nlmixr2(
+  M3_WT_allo_V_allo_CL_AGE_CL,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+############################################################
+# M3B-9. Body Weight on CL/F and V/F + Age on CL/F + Sex on V/F
+############################################################
+
+M3_WT_allo_V_allo_CL_AGE_CL_SEX_V <- M3_base %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      0.75 * log(WT_RATIO) +
+      theta_AGE_CL * log(AGE_RATIO) +
+      eta.cl
+    )
+    
+    v <- exp(
+      tv +
+      log(WT_RATIO) +
+      theta_SEX_V * SEX_REF +
+      eta.v
+    )
+
+  }) %>%
+  
+  ini(
+    theta_AGE_CL = 0.35,
+    theta_SEX_V = 0.75
+  )
+  
+# Check Model Structure
+M3_WT_allo_V_allo_CL_AGE_CL_SEX_V
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+
+fit_M3_WT_allo_V_allo_CL_AGE_CL_SEX_V <- nlmixr2(
+  M3_WT_allo_V_allo_CL_AGE_CL_SEX_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+############################################################
+# M3B-9. Full Candidate Model: M3_WT_allo_V_allo_CL_AGE_CL
+
+         # WT^0.75(AGE) -> CL/F
+         # WT^1 -> V/F
+############################################################
+
+M3B_full_candidate <- fit_M3_WT_allo_V_allo_CL_AGE_CL$finalUi
+
+# Check full candidate model structure
+M3B_full_candidate
+
+# ----------------------------------------------------------
+# Candidate Model Fitting
+# ----------------------------------------------------------
+
+fit_M3B_full_candidate <- nlmixr2(
+  M3B_full_candidate,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```

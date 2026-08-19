@@ -78,9 +78,10 @@ popPK_control <- nlmixr2est::foceiControl(
 ############################################################
 
 dat_raw <- read_csv(
-  data_file,
+  here("Data", "warfarin_full_dataset_ID9_cleaned_for_popPKPD.csv"),
   show_col_types = FALSE
 )
+
 
 pk_data <- dat_raw %>%
   filter(evid == 1 | (evid == 0 & dvid == "cp")) %>%
@@ -90,14 +91,22 @@ pk_data <- dat_raw %>%
     DV   = ifelse(evid == 1, NA_real_, as.numeric(dv)),
     AMT  = ifelse(evid == 1, as.numeric(amt), 0),
     EVID = as.integer(evid),
-    CMT  = ifelse(EVID == 1, "depot", "central")
+    CMT  = ifelse(EVID == 1, "depot", "central"),
+
+    WT   = as.numeric(wt),
+    AGE  = as.numeric(age),
+    SEX  = tolower(trimws(as.character(sex)))
   ) %>%
-  select(ID, TIME, DV, AMT, EVID, CMT) %>%
+  select(
+    ID, TIME, DV, AMT, EVID, CMT,
+    WT, AGE, SEX
+  ) %>%
   arrange(ID, TIME, desc(EVID))
+
 
 names(pk_data)
 table(pk_data$EVID, pk_data$CMT)
-print(pk_data, n = 279)
+print(pk_data, n=279)
 
 ```
 

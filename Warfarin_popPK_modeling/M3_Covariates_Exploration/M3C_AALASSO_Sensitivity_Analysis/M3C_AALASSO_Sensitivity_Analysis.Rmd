@@ -1,0 +1,251 @@
+---
+title: "M3C_AALASSO_Sensitivity_Analysis"
+author: "Yizhen Lai"
+date: "2026-08-16"
+output: html_document
+---
+
+```{r}
+############################################################
+# M3C-1. Full Candidate Model: 
+         # WT^0.75(AGE) -> CL/F + WT^1 -> V/F
+############################################################
+
+# YOU HAVE TO RUN M3B BEFORE RUNNING M3C
+M3C_full_candidate <- M3B_full_candidate
+
+# Check full candidate model structure
+M3C_full_candidate
+
+# ----------------------------------------------------------
+# Candidate Model Fitting
+# ----------------------------------------------------------
+
+fit_M3C_full_candidate <- nlmixr2(
+  M3C_full_candidate,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+```
+
+```{r}
+############################################################
+# M3C-2. AGE on CL/F eliminated from candidate model 
+############################################################
+
+M3_full_candidate_AGEOFF_CL <- M3C_full_candidate %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      0.75 * log(WT_RATIO) +
+      eta.cl
+    )
+    
+    v <- exp(
+      tv +
+      log(WT_RATIO) +
+      eta.v
+    )
+  })
+
+# Check Model Structure
+M3_full_candidate_AGEOFF_CL
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+
+fit_M3_full_candidate_AGEOFF_CL <- nlmixr2(
+  M3_full_candidate_AGEOFF_CL,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+############################################################
+# M3C-1. - Adjusted Adaptive LASSO sensitivity analysis
+############################################################
+
+library(nlmixr2extra)
+
+set.seed(123)
+
+aalasso_coef <- nlmixr2extra::adjustedlassoCoefficients(
+  fit        = fit_M3_base,
+  varsVec    = c("cl", "v"),
+  covarsVec  = c("WT", "AGE"),
+  catvarsVec = c("SEX")
+)
+
+# Show AALASSO coefficients
+aalasso_coef
+
+```
+
+```{r}
+############################################################
+# M3C - Parser-friendly WT-allometry base for AALASSO
+############################################################
+
+M3C_WTbase <- function() {
+
+  ini({
+    # Warm start from the WT-allometry model
+    tka <- -0.588372820997441
+    tcl <- -2.00689415844002
+    tv  <-  2.0588496730745
+
+    eta.ka ~ 0.486065216576769
+    eta.cl ~ 0.0791344020445393
+    eta.v  ~ 0.0489983820015782
+
+    add.err  <- c(0, 0.706496716528912)
+    prop.err <- c(0, 0.113251840215675)
+  })
+
+  model({
+
+    ka <- exp(tka + eta.ka)
+
+    # Pure mu-referenced PK parameters
+    cl0 <- exp(tcl + eta.cl)
+    v0  <- exp(tv  + eta.v)
+
+    # Fixed WT allometric backbone
+    cl <- cl0 * WT_RATIO^0.75
+    v  <- v0  * WT_RATIO^1.00
+
+    d/dt(depot)   = -ka * depot
+    d/dt(central) =  ka * depot - cl / v * central
+
+    cp = central / v
+
+    cp ~ add(add.err) + prop(prop.err)
+  })
+}
+
+
+fit_M3C_WTbase <- nlmixr2(
+  M3C_WTbase,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+fit_M3C_WTbase
+```
+
+```{r}
+library(nlmixr2extra)
+
+set.seed(20260818)
+
+aalasso_WTbase_coef <- nlmixr2extra::adjustedlassoCoefficients(
+  fit        = fit_M3C_WTbase,
+  varsVec    = c("cl0", "v0"),
+  covarsVec  = c("AGE"),
+  catvarsVec = c("SEX")
+)
+
+aalasso_WTbase_coef
+
+
+```
+
+```{r}
+############################################################
+#M3C-2. M3 base model + AGE on V/F
+############################################################
+
+M3_AGE_V <- fit_M3_base %>%
+  model({
+    v <- exp(
+      tv +
+      theta_AGE_V * log(AGE_RATIO) +
+      eta.v
+    )
+    
+  }) %>%
+  
+  ini(
+    theta_AGE_V = 0.75
+  )
+
+# Check Model Structure
+M3_AGE_V
+
+# ----------------------------------------------------------
+# Model Fitting
+# ----------------------------------------------------------
+
+fit_M3_AGE_V <- nlmixr2(
+  M3_AGE_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+############################################################
+# M3C-3. Body Weight on CL/F and V/F + Age on V/F
+############################################################
+
+M3_WT_allo_V_allo_CL_AGE_V <- M3_base %>%
+  model({
+
+    cl <- exp(
+      tcl +
+      0.75 * log(WT_RATIO) +
+      eta.cl
+    )
+    
+    v <- exp(
+      tv +
+      log(WT_RATIO) +
+      theta_AGE_V * log(AGE_RATIO) +
+      eta.v
+    )
+
+  }) %>%
+  
+  ini(
+    theta_AGE_V = 0.022
+  )
+  
+# Check Model Structure
+M3_WT_allo_V_allo_CL_AGE_V
+
+# ----------------------------------------------------------
+# Fit the Model
+# ----------------------------------------------------------
+
+fit_M3_WT_allo_V_allo_CL_AGE_V <- nlmixr2(
+  M3_WT_allo_V_allo_CL_AGE_V,
+  data = M3B_data,
+  est = "focei",
+  control = popPK_control_M3B
+)
+
+```
+
+```{r}
+############################################################
+# M3C-4. Final Covariates Selection: 
+         # WT^0.75(AGE) -> CL/F
+         # WT^1 -> V/F
+############################################################
+
+Final_PopPK_structure <- M3B_full_candidate 
+
+# Check final PK model structure
+Final_PopPK_structure
+
+```
+```
